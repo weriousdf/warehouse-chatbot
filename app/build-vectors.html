@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>벡터스토어 만들기</title>
+    <style>
+      body { background: #09090b; color: #e4e4e7; font: 15px/1.6 system-ui, sans-serif; margin: 0; padding: 16px; }
+      main { max-width: 720px; margin: 0 auto; }
+      button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
+      pre { white-space: pre-wrap; word-break: break-all; background: #18181b; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>벡터스토어 만들기</h1>
+      <p>
+        <code>data/chunks.json</code>을 검사하고, 챗봇과 같은 브라우저 임베딩 모델로 청크마다 벡터를 만들어
+        <code>public/warehouse-docs.json</code>에 저장합니다. 청크를 고친 뒤에는 이 페이지에서 다시 만듭니다.
+        (<code>npm run dev</code>로 연 개발 서버에서만 저장됩니다)
+      </p>
+      <button id="run">만들기</button>
+      <pre id="log"></pre>
+    </main>
+    <script type="module">
+      import { embedDocument } from "/src/rag.ts";
+
+      const log = (s) => (document.getElementById("log").textContent += s + "\n");
+
+      document.getElementById("run").onclick = async () => {
+        document.getElementById("log").textContent = "";
+        const chunks = await (await fetch("/data/chunks.json", { cache: "no-store" })).json();
+
+        // 검사: 필드 누락·중복 id는 중단, 120자 미만은 경고
+        const seen = new Set();
+        for (const c of chunks) {
+          for (const f of ["id", "text", "url", "section"]) {
+            if (!c[f]) return log(`✗ 중단: ${c.id ?? "(id 없음)"}에 ${f}가 없습니다`);
+          }
+          if (seen.has(c.id)) return log(`✗ 중단: id가 겹칩니다 — ${c.id}`);
+          seen.add(c.id);
+          if (c.text.length < 120) log(`⚠ ${c.id} text가 120자 미만(${c.text.length}자)`);
+        }
+
+        log("임베딩 모델 불러오는 중…(첫 실행은 다운로드)");
+        const docs = [];
+        for (const c of chunks) {
+          const vector = await embedDocument(c);
+          if (vector.length !== 768) return log(`✗ 중단: ${c.id} 벡터가 ${vector.length}차원`);
+          docs.push({ ...c, vector });
+          log(`✓ ${c.id} (${c.section})`);
+        }
+        const v = docs[0].vector;
+        const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+        log(`첫 벡터 앞 5개: [${v.slice(0, 5).map((x) => x.toFixed(4)).join(", ")}]  노름: ${norm.toFixed(4)}`);
+
+        const res = await fetch("/__save-vectors", { method: "POST", body: JSON.stringify(docs) });
+        log(res.ok ? (await res.text()) + " × 768차원" : `✗ 저장 실패 (${res.status})`);
+      };
+    </script>
+  </body>
+</html>

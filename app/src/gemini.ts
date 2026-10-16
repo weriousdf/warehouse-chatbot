@@ -1,4 +1,4 @@
-// 모두콘 안내 챗봇 — Gemini API 폴백 클라이언트 (사용자 API 키, 브라우저 직접 호출)
+// 물류창고 재고 조사 안내 챗봇 — Gemini API 폴백 클라이언트 (사용자 API 키, 브라우저 직접 호출)
 import { judgeAll, type JudgeResult } from "./judge";
 
 export type { JudgeResult };

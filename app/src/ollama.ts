@@ -1,4 +1,4 @@
-// 모두콘 안내 챗봇 — ollama 스트리밍 클라이언트
+// 물류창고 재고 조사 안내 챗봇 — ollama 스트리밍 클라이언트
 // 브라우저가 직접 localhost:11434 호출 (OLLAMA_ORIGINS 설정 필요)
 
 import { judgeAll, type JudgeResult } from "./judge";

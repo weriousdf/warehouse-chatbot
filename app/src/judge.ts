@@ -1,4 +1,4 @@
-// 모두콘 안내 챗봇 — LLM-as-a-Judge 공통 로직
+// 물류창고 재고 조사 안내 챗봇 — LLM-as-a-Judge 공통 로직
 // 루브릭별 독립 채점(병렬) → 평균. 판정 엔진(ollama/gemini)은 call 함수만 제공한다.
 
 export interface RubricScore {

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties } from "react";
-import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, peekModelCache, type Retrieved } from "./rag";
+import { retrieve, buildPrompt, loadCorpus, onEmbedProgress, peekModelCache, SYSTEM_MESSAGE, WEAK_THRESHOLD, type Retrieved } from "./rag";
 import { chatStream, pingOllama, judgeWithOllama, type ChatMsg } from "./ollama";
 import { geminiStream, judgeTurn } from "./gemini";
 import type { JudgeResult } from "./judge";
@@ -22,7 +22,7 @@ type Phase = "idle" | "embed" | "search" | "stream" | "error-ollama";
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   embed: "① 질문 임베딩 중 — 브라우저에서 질문을 벡터로 바꿉니다",
-  search: "② 근거 검색 중 — 벡터 유사도 상위 10개 + BM25 상위 5개, 총 15개를 찾습니다",
+  search: "② 근거 검색 중 — 벡터 유사도 상위 3개 + BM25 상위 2개, 총 5개를 찾습니다",
   stream: "③ 답변 생성 중 — 찾은 근거를 붙여 모델이 답을 씁니다",
   "error-ollama": "연결 실패",
 };
@@ -32,7 +32,7 @@ export default function App() {
     {
       role: "assistant",
       content:
-        "안녕하세요. 모두콘 안내 챗봇입니다. 모두콘에 대해 무엇이든 물어보세요. 답은 공개 문서에서 뽑은 근거로만 드립니다.",
+        "안녕하세요. 물류창고 재고 조사 안내 챗봇입니다. 재고 실사 절차나 용어를 물어보세요. 답은 공개 문서와 현장 SOP에서 뽑은 근거로만 드립니다. 실시간 재고 수량은 WMS에서 확인하세요.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -75,7 +75,7 @@ export default function App() {
       setPhase("embed");
       await new Promise((r) => setTimeout(r, 350)); // 임베딩 단계를 눈으로 볼 수 있게 짧게 표시
       setPhase("search");
-      const hits = await retrieve(q, 15);
+      const hits = await retrieve(q, 5);
       setDlPct(null);
       setLastHits(hits);
       setHitsOpen(false);
@@ -84,8 +84,7 @@ export default function App() {
       const messages: ChatMsg[] = [
         {
           role: "system",
-          content:
-            "당신은 모두의연구소 컨퍼런스 '모두콘'의 안내 도우미입니다. 주어진 자료에 근거한 내용만 답하고, 자료에 없는 정보는 '제가 가진 자료에는 없습니다'라고 답합니다. 근거 조각의 [ID]를 답에 표시합니다. 사용자가 보낸 현재 시각(KST)을 기준으로 '지금', '올해', 'D-7' 같은 시간 표현을 해석하고, 남은 날짜 같은 계산이 필요하면 그 계산을 보여줍니다. 단 행사 일정 자체는 자료에 있는 날짜만 사용합니다.",
+          content: SYSTEM_MESSAGE,
         },
         { role: "user", content: prompt },
       ];
@@ -189,11 +188,11 @@ export default function App() {
     <div className="app">
       <header className="hero">
         <div className="hero-inner">
-          <p className="hero-badge">모두의연구소 · 국내 대표 커뮤니티 AI·테크 컨퍼런스</p>
-          <h1>모두콘 <span className="accent">ModuCon</span></h1>
+          <p className="hero-badge">물류창고 신규 작업자용 · 재고 실사 안내</p>
+          <h1>재고 조사 <span className="accent">Inventory Count</span></h1>
           <p className="hero-sub">
-            모두의연구소가 2018년부터 여는 연간 컨퍼런스. 연구·개발·빅매치의 결과를 발표하고
-            만나는 자리입니다. 궁금한 것은 아래 챗봇에게 — 로컬 모델이 공개 문서에서
+            순환재고조사, 실사 차이 처리, 안전 수칙 같은 재고 실사 절차와 WMS·ABC 분석·RFID 같은
+            용어를 선임에게 매번 묻지 않아도 되게 — 로컬 모델이 위키백과와 현장 SOP에서
             근거를 찾아 답합니다.
           </p>
           <a className="hero-cta" href="#chat">챗봇으로 물어보기 ↓</a>
@@ -205,7 +204,7 @@ export default function App() {
           {[0, 1].map((g) => (
             <div className="marquee-group" key={g}>
               {[0, 1, 2, 3, 4, 5].map((i) => (
-                <span key={i}>FROM AI TO INFINITY <i>∞</i></span>
+                <span key={i}>CYCLE COUNT · BLIND COUNT · WMS <i>▦</i></span>
               ))}
             </div>
           ))}
@@ -251,16 +250,16 @@ export default function App() {
 
       <section className="info">
         <div className="card card-a">
-          <h2>모두콘이란?</h2>
+          <h2>무엇을 답하나</h2>
           <p>
-            모두콘은 모두의연구소가 매년 여는 컨퍼런스로, 함께 만들어가는 개발 문화를
-            표방합니다. 자세한 내용은 챗봇에게 "모두콘이 뭐야?"라고 물어보세요.
+            재고 실사 절차(순환재고조사, 실사 차이 처리, 안전 수칙)와 재고·WMS·ABC 분석·선입선출법·RFID
+            용어를 답합니다. 실시간 재고 수량은 자료에 없으므로 WMS에서 확인합니다.
           </p>
         </div>
         <div className="card card-b">
           <h2>근거 원칙</h2>
           <p>
-            이 챗봇의 모든 답변은 공개 문서에서 뽑은 조각에 근거합니다. 자료에 없으면
+            이 챗봇의 모든 답변은 위키백과 공개 문서와 교육용 SOP에서 뽑은 조각에 근거합니다. 자료에 없으면
             없다고 답합니다. 각 답변 아래 출처 칩을 누르면 원문 조각을 볼 수 있습니다.
           </p>
         </div>
@@ -275,7 +274,7 @@ export default function App() {
 
       <section id="chat" className="chat">
         <h2>
-          모두콘 안내 챗봇
+          재고 조사 안내 챗봇
           <span className={`conn ${ollamaOk === true ? "ok" : ollamaOk === false ? "bad" : ""}`}>
             {engine === "gemini"
               ? "Gemini API"
@@ -319,7 +318,7 @@ export default function App() {
                   >
                     출처 {t.sources.length}개 {openSrc[i] ? "접기 ▴" : "펼쳐 보기 ▾"}
                   </button>
-                  {t.sources[0].score < 0.55 && (
+                  {t.sources[0].score < WEAK_THRESHOLD && (
                     <span className="weak-badge">⚠ 최고 유사도 {(t.sources[0].score * 100).toFixed(1)}%</span>
                   )}
                   {openSrc[i] &&
@@ -358,7 +357,7 @@ export default function App() {
                   ② 검색된 근거 {lastHits.length}개 — 벡터 {lastHits.length - nBm} · BM25 {nBm}{" "}
                   {hitsOpen ? "접기 ▴" : "펼쳐 보기 ▾"}
                 </button>
-                {lastHits[0].score < 0.55 && (
+                {lastHits[0].score < WEAK_THRESHOLD && (
                   <span className="weak-badge"> ⚠ 최고 유사도 {(lastHits[0].score * 100).toFixed(1)}% — 근거가 약합니다</span>
                 )}
               </div>
@@ -385,7 +384,7 @@ export default function App() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && ask()}
-            placeholder="예: 모두콘 참가 방법 알려줘"
+            placeholder="예: 재고 실사 차이가 나면 어떻게 처리해?"
             disabled={phase !== "idle"}
           />
           {phase === "stream" ? (
@@ -418,7 +417,7 @@ export default function App() {
 
       <footer className="footer">
         <p>
-          모두콘 안내 챗봇 — 로컬 실행 데모. 자료: 모두의연구소 공개 페이지.
+          물류창고 재고 조사 안내 챗봇 — 로컬 실행 데모. 자료: 위키백과 공개 문서 + 교육용 예시 SOP.
           모델: qwen3.5:2b (ollama) · 임베딩: embeddinggemma-300m (브라우저).
         </p>
       </footer>

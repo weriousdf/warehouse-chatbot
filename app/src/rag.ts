@@ -1,9 +1,10 @@
-// 모두콘 안내 챗봇 — RAG 유틸리티
+// 물류창고 재고 조사 안내 챗봇 — RAG 유틸리티 (모두콘 안내 챗봇 구조를 그대로 사용)
 // 임베딩: embeddinggemma-300m (model_no_gather_q4 변형 — 브라우저 WASM ORT 호환)
 //   - transformers.js pipeline()은 q4/q8 기본 파일을 골라 GatherBlockQuantized
 //     미지원으로 실패하므로, 토크나이저만 transformers.js로 쓰고
 //     ORT 세션은 no_gather_q4 파일로 직접 만든다 (2026-08 헤드리스 검증).
-// 검색: moducon-docs.json 정적 벡터스토어와 코사인 유사도 top-k
+//   - 입력 형식은 모델 카드 공식 형식: 문서 "title: 섹션 | text: 본문", 질문 "task: search result | query: 질문"
+// 검색: warehouse-docs.json 정적 벡터스토어와 코사인 유사도 top-k
 
 import { AutoTokenizer, type PreTrainedTokenizer } from "@huggingface/transformers";
 
@@ -48,7 +49,7 @@ export async function peekModelCache(): Promise<boolean> {
 
 // 모델 파일 캐시 — HF resolve URL은 요청마다 서명이 다른 CDN 주소로 리다이렉트되어
 // HTTP 캐시가 히트하지 않는다. Cache Storage에 직접 보관해 재방문 시 재다운로드를 막는다.
-const MODEL_CACHE = "moducon-embed-v1";
+const MODEL_CACHE = "warehouse-embed-v1";
 
 async function fetchWithProgress(url: string, file: string): Promise<Uint8Array> {
   let cache: Cache | null = null;
@@ -159,11 +160,24 @@ export async function embed(text: string): Promise<number[]> {
   return vec;
 }
 
+/** 문서용 임베딩 — 벡터스토어를 만들 때(build-vectors.html) 쓴다 */
+export function embedDocument(chunk: { section: string; text: string }): Promise<number[]> {
+  return embed(`title: ${chunk.section} | text: ${chunk.text}`);
+}
+
+/** 질문용 임베딩 — 검색할 때 쓴다. 문서용과 접두어가 다르다 */
+export function embedQuery(question: string): Promise<number[]> {
+  return embed(`task: search result | query: ${question}`);
+}
+
+/** 약한 근거 기준 — 1위 점수가 이보다 낮으면 "관련 자료가 약함". 이 값은 여기에서만 정의한다 */
+export const WEAK_THRESHOLD = 0.55;
+
 let corpus: DocChunk[] | null = null;
 
 export async function loadCorpus(): Promise<DocChunk[]> {
   if (corpus) return corpus;
-  const res = await fetch(`${import.meta.env.BASE_URL}moducon-docs.json`);
+  const res = await fetch(`${import.meta.env.BASE_URL}warehouse-docs.json`);
   if (!res.ok) throw new Error(`docs 로드 실패: ${res.status}`);
   corpus = (await res.json()) as DocChunk[];
   return corpus;
@@ -194,8 +208,8 @@ function queryTerms(q: string): string[] {
 
 // ── BM25 단어 검색 ────────────────────────────────────────────────────────
 //  tf(빈도)·IDF(희귀도)·문서 길이 정규화를 갖춘 표준 단어 검색 점수(k1=1.5, b=0.75).
-//  tf는 토큰 '포함' 관계로 세서 조사가 붙은 형태("모두콘의")도 "모두콘" 검색어에
-//  적중시킨다. 말뭉치가 37조각이라 질문마다 그 자리에서 계산한다(별도 색인 없음).
+//  tf는 토큰 '포함' 관계로 세서 조사가 붙은 형태("재고관리의")도 "재고관리" 검색어에
+//  적중시킨다. 말뭉치가 14조각이라 질문마다 그 자리에서 계산한다(별도 색인 없음).
 const BM25_K1 = 1.5;
 const BM25_B = 0.75;
 
@@ -223,11 +237,14 @@ function bm25(docs: DocChunk[], terms: string[]): { chunk: DocChunk; score: numb
   });
 }
 
-/** 하이브리드 검색 — 벡터 유사도 상위 10개 + BM25 상위 5개(벡터 결과와 중복 제외).
- *  BM25가 5개를 못 채우면 벡터 순위 11위부터 보충해 항상 k개를 돌려준다.
+/** 벡터 검색으로 고르는 개수 — 청크가 14개뿐이라 3개(가이드 STEP 4 검색 계약) */
+export const VECTOR_K = 3;
+
+/** 하이브리드 검색 — 벡터 유사도 상위 3개 + BM25 상위 2개(벡터 결과와 중복 제외).
+ *  BM25가 2개를 못 채우면 벡터 순위 4위부터 보충해 항상 k개를 돌려준다.
  *  BM25 점수는 표시를 위해 이번 질문의 최상위가 1이 되게 정규화한다. */
-export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
-  const [docs, q] = await Promise.all([loadCorpus(), embed(question)]);
+export async function retrieve(question: string, k = 5): Promise<Retrieved[]> {
+  const [docs, q] = await Promise.all([loadCorpus(), embedQuery(question)]);
   const vec = docs
     .map((chunk) => {
       let dot = 0;
@@ -236,7 +253,7 @@ export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
       return { chunk, score: dot, method: "vector" as const };
     })
     .sort((a, b) => b.score - a.score);
-  const topVec = vec.slice(0, Math.min(10, k));
+  const topVec = vec.slice(0, Math.min(VECTOR_K, k));
   const picked = new Set(topVec.map((r) => r.chunk.id));
   const scored = bm25(docs, queryTerms(question))
     .filter((r) => r.score > 0 && !picked.has(r.chunk.id))
@@ -253,30 +270,37 @@ export async function retrieve(question: string, k = 15): Promise<Retrieved[]> {
   return [...topVec, ...lex, ...rest];
 }
 
-/** RAG 시스템 지시 — 근거 원칙을 고정 */
+/** 시스템 메시지 — 챗봇의 역할과 경계(가이드 STEP 6 생성 계약) */
+export const SYSTEM_MESSAGE =
+  "당신은 물류창고 재고 조사 안내 도우미입니다. 주어진 자료에 근거한 내용만 답하고, 자료에 없는 정보는 '제가 가진 자료에는 없습니다'라고 답합니다. 실시간 재고 수량이나 로케이션별 수량을 묻는 질문에는 자료에 없다고 말하고 WMS에서 확인하라고 안내합니다. 근거 조각의 ID만 [WH-012]처럼 대괄호로 감싸 해당 문장 끝에 표시합니다.";
+
+/** 사용자 메시지 조립 — ① 자료 소개 ② 근거 원칙 ③ 출처 규칙 ④ KST 시각 ⑤ [자료] ⑥ [질문] ⑦ 출처 규칙 한 번 더 */
 export function buildPrompt(question: string, hits: Retrieved[]): string {
   const now = new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
     year: "numeric", month: "long", day: "numeric", weekday: "long",
     hour: "2-digit", minute: "2-digit", hour12: true,
   }).format(new Date());
+  // 대괄호 안에는 ID만 — 작은 모델이 "[ID | 제목]" 머리를 통째로 베껴 쓰지 않게
   const context = hits
-    .map((h) => `[${h.chunk.id} | ${h.chunk.section}] ${h.chunk.text}`)
+    .map((h) => `[${h.chunk.id}] (${h.chunk.section}) ${h.chunk.text}`)
     .join("\n\n");
   const best = hits[0]?.score ?? 0;
-  const weakNote = best < 0.55
+  const weakNote = best < WEAK_THRESHOLD
     ? "주의: 검색된 조각의 유사도가 낮습니다. 질문과 완전히 맞는 근거가 아닐 수 있으니, 근거에 있는 내용만 짧게 답하고 자료에 없는 부분은 없다고 말합니다."
     : "자료에 근거한 내용만 답하고, 자료에 없으면 없다고 말합니다.";
   return [
-    "다음 자료는 모두의연구소의 컨퍼런스 '모두콘'에 대한 공개 문서에서 뽑은 조각입니다.",
+    "다음 자료는 물류창고 재고 조사에 관한 공개 문서와 현장 SOP에서 뽑은 조각입니다.",
     weakNote,
-    "근거가 된 조각의 [ID]를 답 안에서 표시합니다.",
-    `현재 시각은 ${now}(한국 표준시 KST)입니다. '지금', '올해', '다음 주' 같은 상대 표현은 이 시각을 기준으로 해석합니다.`,
+    "근거가 된 조각의 ID만 [WH-012]처럼 대괄호로 감싸 해당 문장 끝에 표시합니다.",
+    `현재 시각은 ${now}(KST)입니다. '지금', '올해', '다음 주' 같은 상대 표현은 이 시각을 기준으로 해석합니다.`,
     "",
     "[자료]",
     context,
     "",
     "[질문]",
     question,
+    "",
+    "(답할 때 근거로 쓴 자료의 ID를 [WH-012]처럼 문장 끝에 붙입니다.)",
   ].join("\n");
 }
